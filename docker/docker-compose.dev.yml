@@ -1,0 +1,197 @@
+version: '3.8'
+
+services:
+
+  # Database
+  db:
+    image: postgres:12.1-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-db
+    restart: always
+    expose:
+      - ${DB_PORT}
+    environment:
+      - POSTGRES_DB=${DB_DATABASE}
+      - POSTGRES_USER=${DB_USERNAME}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./sql/:/docker-entrypoint-initdb.d/
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+
+  # Nginx
+  nginx:
+    build:
+      context: ./docker/nginx
+    container_name: ${COMPOSE_PROJECT_NAME}-nginx
+    command: /bin/bash -c "envsubst '$$NGINX_PORT $$NGINX_ROOT $$NGINX_HOST $$PHP_HOST $$PHP_PORT' < /etc/nginx/site.conf.tmpl > /etc/nginx/sites-available/site.conf && nginx -g 'daemon off;'"
+    restart: always
+    expose:
+      - ${APP_PORT}
+    working_dir: /etc/nginx
+    environment:
+      - VIRTUAL_HOST=${APP_HOST}
+      - VIRTUAL_PORT=${APP_PORT}
+      - VIRTUAL_PROTO=https
+      - VIRTUAL_NETWORK=proxy
+      - SELF_SIGNED_HOST=${APP_HOST}
+      - NGINX_ROOT=${APP_PATH}
+      - NGINX_HOST=${APP_HOST}
+      - NGINX_PORT=${APP_PORT}
+      - PHP_HOST=${PHP_HOST}
+      - PHP_PORT=${PHP_PORT}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+      - ../log/nginx/:/var/log/nginx
+      - ../etc/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ../etc/nginx/site.conf.tmpl:/etc/nginx/site.conf.tmpl
+      - /etc/nginx/sites-available
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./certs:/etc/nginx/certs:rw
+    depends_on:
+      - php
+    links:
+      - php:${PHP_HOST}
+    networks:
+      - proxy
+      - default
+
+  # Node
+  webpacker:
+    image: node:12-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-webpacker
+    command: npm run watch-poll
+    restart: always
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+
+  # PHP-FPM
+  php:
+    build:
+      context: ./docker/php-fpm
+      args:
+        - INSTALL_OPCACHE=false
+        - INSTALL_XDEBUG=false
+    container_name: ${COMPOSE_PROJECT_NAME}-php
+    restart: always
+    expose:
+      - ${PHP_PORT}
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+    depends_on:
+      - db
+    links:
+      - db:${DB_HOST}
+
+  # Composer
+  composer:
+    build:
+      context: ./docker/php-fpm
+    container_name: ${COMPOSE_PROJECT_NAME}-composer
+    entrypoint: composer
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+      - COMPOSER_ALLOW_SUPERUSER=0
+      - COMPOSER_MEMORY_LIMIT=-1
+      - COMPOSER_MIRROR_PATH_REPOS=1
+      - COMPOSER_AUTH=${COMPOSER_AUTH}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+      - ${SOURCE_REPO_PATH}:${APP_REPO_PATH}
+
+  # Artisan
+  artisan:
+    build:
+      context: php-fpm
+    container_name: ${COMPOSE_PROJECT_NAME}-artisan
+    entrypoint: php artisan
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    depends_on:
+      - php
+    links:
+      - db:${DB_HOST}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+
+  # Stan
+  stan:
+    build:
+      context: php-fpm
+    container_name: ${COMPOSE_PROJECT_NAME}-stan
+    entrypoint: php vendor/bin/phpstan
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    depends_on:
+      - php
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+
+  # Postgres web UI
+  pgadmin:
+    image: dpage/pgadmin4:4.19
+    container_name: ${COMPOSE_PROJECT_NAME}-pgadmin
+    restart: always
+    expose:
+      - ${DB_ADMIN_PORT}
+    environment:
+      - VIRTUAL_HOST=pgadmin.${APP_HOST}
+      - VIRTUAL_PORT=${DB_ADMIN_PORT}
+      - VIRTUAL_NETWORK=proxy
+      - SELF_SIGNED_HOST=pgadmin.${APP_HOST}
+      - PGADMIN_DEFAULT_EMAIL=${DB_ADMIN_USER}
+      - PGADMIN_DEFAULT_PASSWORD=${DB_ADMIN_PASSWORD}
+    volumes:
+      - pgadmin:/var/lib/pgadmin
+    depends_on:
+      - db
+    links:
+      - db:${DB_HOST}
+    networks:
+      - proxy
+      - default
+
+  # mailhog
+  mailhog:
+    image: mailhog/mailhog
+    container_name: ${COMPOSE_PROJECT_NAME}-mailhog
+    restart: always
+    user: root
+    environment:
+      - VIRTUAL_HOST=mailhog.${APP_HOST}
+      - VIRTUAL_PORT=${MAILHOG_HTTP_PORT}
+      - VIRTUAL_NETWORK=proxy
+      - SELF_SIGNED_HOST=pgadmin.${APP_HOST}
+      - MH_SMTP_BIND_ADDR=0.0.0.0:${MAILHOG_PORT}
+    expose:
+      - ${MAILHOG_PORT}
+      - ${MAILHOG_HTTP_PORT}
+    networks:
+      - proxy
+      - default
+
+volumes:
+  db:
+  pgadmin:
+
+networks:
+  proxy:
+    external:
+      name: proxy

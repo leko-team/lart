@@ -1,0 +1,77 @@
+version: '3.7'
+
+services:
+
+  # Nginx
+  nginx:
+    environment:
+      - SELF_SIGNED_HOST=${APP_HOST}
+
+  # Stan
+  stan:
+    build:
+      context: php-fpm
+      target: php
+      args:
+        - UID=${UID}
+        - GID=${GID}
+        - INSTALL_OPCACHE={PHP_INSTALL_OPCACHE}
+        - INSTALL_XDEBUG={PHP_INSTALL_XDEBUG}
+    container_name: ${COMPOSE_PROJECT_NAME}-stan
+    entrypoint: php vendor/bin/phpstan
+    restart: always
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    depends_on:
+      - php
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+
+  # Postgres web UI
+  pgadmin:
+    image: dpage/pgadmin4:6.0
+    container_name: ${COMPOSE_PROJECT_NAME}-pgadmin
+    restart: always
+    expose:
+      - ${DB_ADMIN_PORT}
+    environment:
+      - VIRTUAL_HOST=pgadmin.${APP_HOST}
+      - VIRTUAL_PORT=${DB_ADMIN_PORT}
+      - VIRTUAL_NETWORK=proxy
+      - SELF_SIGNED_HOST=pgadmin.${APP_HOST}
+      - PGADMIN_DEFAULT_EMAIL=${DB_ADMIN_USER}
+      - PGADMIN_DEFAULT_PASSWORD=${DB_ADMIN_PASSWORD}
+    volumes:
+      - pgadmin:/var/lib/pgadmin
+    depends_on:
+      - db
+    links:
+      - db:${DB_HOST}
+    networks:
+      - proxy
+      - default
+
+  # mailhog
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: ${COMPOSE_PROJECT_NAME}-mailhog
+    restart: always
+    user: root
+    environment:
+      - VIRTUAL_HOST=mailhog.${APP_HOST}
+      - VIRTUAL_PORT=${MAILHOG_HTTP_PORT}
+      - VIRTUAL_NETWORK=proxy
+      - SELF_SIGNED_HOST=pgadmin.${APP_HOST}
+      - MH_SMTP_BIND_ADDR=0.0.0.0:${MAILHOG_PORT}
+    expose:
+      - ${MAILHOG_PORT}
+      - ${MAILHOG_HTTP_PORT}
+    networks:
+      - proxy
+      - default
+
+volumes:
+  pgadmin:

@@ -1,0 +1,154 @@
+version: '3.7'
+
+services:
+
+  # Database
+  db:
+    image: postgres:12.1-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-db
+    restart: always
+    expose:
+      - ${DB_PORT}
+    environment:
+      - POSTGRES_DB=${DB_DATABASE}
+      - POSTGRES_USER=${DB_USERNAME}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./sql/:/docker-entrypoint-initdb.d/
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+
+  # Nginx
+  nginx:
+    build:
+      context: nginx
+    container_name: ${COMPOSE_PROJECT_NAME}-nginx
+    command: /bin/bash -c "envsubst '$$NGINX_PORT $$NGINX_ROOT $$NGINX_HOST $$PHP_HOST $$PHP_PORT' < /etc/nginx/site.conf.tmpl > /etc/nginx/sites-available/site.conf && nginx -g 'daemon off;'"
+    restart: always
+    expose:
+      - ${APP_PORT}
+    working_dir: /etc/nginx
+    environment:
+      - VIRTUAL_HOST=${APP_HOST}
+      - VIRTUAL_PORT=${APP_PORT}
+      - VIRTUAL_PROTO=https
+      - VIRTUAL_NETWORK=proxy
+      - NGINX_ROOT=${APP_PATH}
+      - NGINX_HOST=${APP_HOST}
+      - NGINX_PORT=${APP_PORT}
+      - PHP_HOST=${PHP_HOST}
+      - PHP_PORT=${PHP_PORT}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+      - ../log/nginx/:/var/log/nginx
+      - ../etc/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ../etc/nginx/site.conf.tmpl:/etc/nginx/site.conf.tmpl
+      - ../certs:/etc/nginx/certs:rw
+      - /etc/nginx/sites-available
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      - php
+    links:
+      - php:${PHP_HOST}
+    networks:
+      - proxy
+      - default
+
+  # Node
+  webpacker:
+    image: node:12-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-webpacker
+    command: npm run watch-poll
+    restart: always
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+
+  # PHP
+  php:
+    build:
+      context: php-fpm
+      target: php
+      args:
+        - UID=${UID}
+        - GID=${GID}
+        - INSTALL_OPCACHE=${PHP_INSTALL_OPCACHE}
+        - INSTALL_XDEBUG=${PHP_INSTALL_XDEBUG}
+    container_name: ${COMPOSE_PROJECT_NAME}-php
+    restart: always
+    expose:
+      - ${PHP_PORT}
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+    depends_on:
+      - db
+    links:
+      - db:${DB_HOST}
+
+  # Composer
+  composer:
+    build:
+      context: php-fpm
+      target: composer
+      args:
+        - UID=${UID}
+        - GID=${GID}
+        - INSTALL_OPCACHE=${PHP_INSTALL_OPCACHE}
+        - INSTALL_XDEBUG=${PHP_INSTALL_XDEBUG}
+    container_name: ${COMPOSE_PROJECT_NAME}-composer
+    entrypoint: composer
+    restart: always
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+      - COMPOSER_ALLOW_SUPERUSER=${COMPOSER_ALLOW_SUPERUSER}
+      - COMPOSER_MEMORY_LIMIT=${COMPOSER_MEMORY_LIMIT}
+      - COMPOSER_MIRROR_PATH_REPOS=${COMPOSER_MIRROR_PATH_REPOS}
+      - COMPOSER_TOKEN=${COMPOSER_TOKEN}
+      # - COMPOSER_AUTH=${COMPOSER_AUTH}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+      - ${SOURCE_REPO_PATH}:${APP_REPO_PATH}
+
+  # Artisan
+  artisan:
+    build:
+      context: php-fpm
+      target: php
+      args:
+        - UID=${UID}
+        - GID=${GID}
+        - INSTALL_OPCACHE=${PHP_INSTALL_OPCACHE}
+        - INSTALL_XDEBUG=${PHP_INSTALL_XDEBUG}
+    container_name: ${COMPOSE_PROJECT_NAME}-artisan
+    entrypoint: php artisan
+    restart: always
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    depends_on:
+      - php
+    links:
+      - db:${DB_HOST}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+
+volumes:
+  db:
+
+networks:
+  proxy:
+    external:
+      name: proxy
