@@ -18,8 +18,8 @@ services:
         - INSTALL_OPCACHE={PHP_INSTALL_OPCACHE}
         - INSTALL_XDEBUG={PHP_INSTALL_XDEBUG}
     container_name: ${COMPOSE_PROJECT_NAME}-stan
+    restart: "no"
     entrypoint: php vendor/bin/phpstan
-    restart: always
     user: ${UID}:${GID}
     working_dir: ${APP_PATH}
     environment:

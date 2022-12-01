@@ -104,8 +104,8 @@ services:
         - INSTALL_OPCACHE=${PHP_INSTALL_OPCACHE}
         - INSTALL_XDEBUG=${PHP_INSTALL_XDEBUG}
     container_name: ${COMPOSE_PROJECT_NAME}-composer
+    restart: "no"
     entrypoint: composer
-    restart: always
     user: ${UID}:${GID}
     working_dir: ${APP_PATH}
     environment:
@@ -131,8 +131,8 @@ services:
         - INSTALL_OPCACHE=${PHP_INSTALL_OPCACHE}
         - INSTALL_XDEBUG=${PHP_INSTALL_XDEBUG}
     container_name: ${COMPOSE_PROJECT_NAME}-artisan
+    restart: "no"
     entrypoint: php artisan
-    restart: always
     user: ${UID}:${GID}
     working_dir: ${APP_PATH}
     environment:
