@@ -2,10 +2,94 @@ version: '3.7'
 
 services:
 
+  # Database
+  db-test:
+    image: postgres:12.1-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-db-test
+    restart: always
+    expose:
+      - ${DB_PORT}
+    environment:
+      - POSTGRES_DB=${DB_DATABASE}
+      - POSTGRES_USER=${DB_USERNAME}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - db-test:/var/lib/postgresql/data
+      - ../sql/:/docker-entrypoint-initdb.d/
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+
   # Nginx
   nginx:
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+      - ../log/nginx/:/var/log/nginx
+      - ../etc/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ../etc/nginx/site.conf.tmpl:/etc/nginx/site.conf.tmpl
+      - ../certs:/etc/nginx/certs:rw
+      - /etc/nginx/sites-available
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+
+  # PHP
+  php:
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+    depends_on:
+      - db
+      - db-test
+    links:
+      - db:${DB_HOST_MAIN}
+      - db-test:${DB_HOST_TEST}
+      - redis:${REDIS_HOST}
+      - elasticsearch:${ELASTIC_SEARCH_HOST}
+
+  # Artisan
+  artisan:
+    extends:
+      service: php
+    container_name: ${COMPOSE_PROJECT_NAME}-artisan
+    restart: "no"
+    entrypoint: php artisan
+
+  # Node
+  webpacker:
+    image: node:12-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-webpacker
+    command: npm run watch-poll
+    restart: always
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    expose:
+      - ${APP_PORT}
     environment:
+      - VIRTUAL_HOST=${APP_HOST}
+      - VIRTUAL_PORT=${APP_PORT}
+      - VIRTUAL_PROTO=https
+      - VIRTUAL_NETWORK=proxy
       - SELF_SIGNED_HOST=${APP_HOST}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+    healthcheck:
+      test: curl -sS http://127.0.0.1 || echo 1
+      interval: 5s
+    networks:
+      - proxy
+      - default
+
+  # Selenium
+  selenium:
+    image: selenium/standalone-chrome:4.1.0-prerelease-20211105
+    restart: always
+    container_name: ${COMPOSE_PROJECT_NAME}-selenium
+    links:
+      - nginx:${APP_HOST}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:4444"]
+      interval: 5s
 
   # Stan
   stan:
@@ -25,14 +109,80 @@ services:
     environment:
       - UID=${UID}
       - GID=${GID}
-    depends_on:
-      - php
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+
+  # Composer
+  composer:
+    build:
+      context: php-fpm
+      target: composer
+      args:
+        - UID=${UID}
+        - GID=${GID}
+        - INSTALL_OPCACHE=${PHP_INSTALL_OPCACHE}
+        - INSTALL_XDEBUG=${PHP_INSTALL_XDEBUG}
+    container_name: ${COMPOSE_PROJECT_NAME}-composer
+    restart: "no"
+    entrypoint: composer
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+      - COMPOSER_ALLOW_SUPERUSER=${COMPOSER_ALLOW_SUPERUSER}
+      - COMPOSER_MEMORY_LIMIT=${COMPOSER_MEMORY_LIMIT}
+      - COMPOSER_MIRROR_PATH_REPOS=${COMPOSER_MIRROR_PATH_REPOS}
+      - COMPOSER_TOKEN=${COMPOSER_TOKEN}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+      - ${SOURCE_REPO_PATH}:${APP_REPO_PATH}
+
+  # PHP Code Styler
+  phpcs:
+    build:
+      context: php-fpm
+      target: php
+      args:
+        - UID=${UID}
+        - GID=${GID}
+        - INSTALL_OPCACHE={PHP_INSTALL_OPCACHE}
+        - INSTALL_XDEBUG={PHP_INSTALL_XDEBUG}
+    container_name: ${COMPOSE_PROJECT_NAME}-phpcs
+    restart: "no"
+    entrypoint: php vendor/bin/phpcs
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    volumes:
+      - ${SOURCE_PATH}:${APP_PATH}
+
+  # PHP Code Beautifier
+  phpcbf:
+    build:
+      context: php-fpm
+      target: php
+      args:
+        - UID=${UID}
+        - GID=${GID}
+        - INSTALL_OPCACHE={PHP_INSTALL_OPCACHE}
+        - INSTALL_XDEBUG={PHP_INSTALL_XDEBUG}
+    container_name: ${COMPOSE_PROJECT_NAME}-phpcbf
+    restart: "no"
+    entrypoint: php vendor/bin/phpcbf
+    user: ${UID}:${GID}
+    working_dir: ${APP_PATH}
+    environment:
+      - UID=${UID}
+      - GID=${GID}
     volumes:
       - ${SOURCE_PATH}:${APP_PATH}
 
   # Postgres web UI
   pgadmin:
-    image: dpage/pgadmin4:6.0
+    image: dpage/pgadmin4:6.5
     container_name: ${COMPOSE_PROJECT_NAME}-pgadmin
     restart: always
     expose:
@@ -48,13 +198,18 @@ services:
       - pgadmin:/var/lib/pgadmin
     depends_on:
       - db
+      - db-test
     links:
-      - db:${DB_HOST}
+      - db:${DB_HOST_MAIN}
+      - db-test:${DB_HOST_TEST}
     networks:
       - proxy
       - default
+    healthcheck:
+      test: ["CMD", "wget", "-O", "-", "http://localhost:80"]
+      interval: 5s
 
-  # mailhog
+  # Mailhog
   mailhog:
     image: mailhog/mailhog:v1.0.1
     container_name: ${COMPOSE_PROJECT_NAME}-mailhog
@@ -64,7 +219,7 @@ services:
       - VIRTUAL_HOST=mailhog.${APP_HOST}
       - VIRTUAL_PORT=${MAILHOG_HTTP_PORT}
       - VIRTUAL_NETWORK=proxy
-      - SELF_SIGNED_HOST=pgadmin.${APP_HOST}
+      - SELF_SIGNED_HOST=mailhog.${APP_HOST}
       - MH_SMTP_BIND_ADDR=0.0.0.0:${MAILHOG_PORT}
     expose:
       - ${MAILHOG_PORT}
@@ -72,6 +227,10 @@ services:
     networks:
       - proxy
       - default
+    healthcheck:
+      test: ["CMD", "wget", "-O", "-", "http://localhost:8025"]
+      interval: 5s
 
 volumes:
+  db-test:
   pgadmin:
