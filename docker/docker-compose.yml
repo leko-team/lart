@@ -80,7 +80,6 @@ services:
     links:
       - db:${DB_HOST_MAIN}
       - redis:${REDIS_HOST}
-      - elasticsearch:${ELASTIC_SEARCH_HOST}
     healthcheck:
       test: healthcheck || echo 1
       interval: 5s

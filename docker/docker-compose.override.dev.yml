@@ -45,7 +45,6 @@ services:
       - db:${DB_HOST_MAIN}
       - db-test:${DB_HOST_TEST}
       - redis:${REDIS_HOST}
-      - elasticsearch:${ELASTIC_SEARCH_HOST}
 
   # Artisan
   artisan:
